@@ -834,3 +834,368 @@ tcp        0      0 0.0.0.0:1099            0.0.0.0:*               LISTEN      
 $ java HelloRMIClient 192.168.65.23 1099 HelloRMIInterface "Hello World"
 $ java.exe HelloRMIClient 192.168.65.23 1099 HelloRMIInterface "Hello World From Windows"
 ```
+
+### 7) java.rmi.Naming
+
+#### 7.1) HelloRMIServer4.java
+
+```java
+/*
+ * javac -encoding GBK -g HelloRMIServer4.java
+ * java HelloRMIServer4 192.168.65.23 1099 192.168.65.23 0 HelloRMIInterface
+ */
+  import java.net.InetAddress;
+  import java.rmi.registry.*;
+  import java.rmi.Naming;
+
+public class HelloRMIServer4
+{
+    public static void main ( String[] argv ) throws Exception
+    {
+        String              addr_0      = argv[0];
+        int                 port_0      = Integer.parseInt( argv[1] );
+        String              addr_1      = argv[2];
+        int                 port_1      = Integer.parseInt( argv[3] );
+        String              name        = argv[4];
+        String              url         = String.format( "rmi://%s:%d/%s", addr_0, port_0, name );
+        InetAddress         bindAddr_0  = InetAddress.getByName( addr_0 );
+        InetAddress         bindAddr_1  = InetAddress.getByName( addr_1 );
+        System.setProperty( "java.rmi.server.hostname", addr_1 );
+        Registry            r           = LocateRegistry.createRegistry( port_0, null, new HelloRMIServerSocketFactoryImpl( bindAddr_0 ) );
+        HelloRMIInterface   hello       = new HelloRMIInterfaceImpl3( port_1, bindAddr_1 );
+        /*
+         * https://docs.oracle.com/javase/8/docs/api/java/rmi/Naming.html
+         *
+         * 这一步过去用的是
+         *
+         * r.rebind( name, hello );
+         *
+         * 第一形参URL指定PORTMAPPER等价物所在，形如:
+         *
+         * rmi://127.0.0.1:1099/HelloRMIInterface
+         */
+        Naming.rebind( url, hello );
+    }
+}
+```
+
+#### 7.2) HelloRMIClient4.java
+
+```java
+/*
+ * javac -encoding GBK -g HelloRMIClient4.java
+ * java HelloRMIClient4 "rmi://192.168.65.23:1099/HelloRMIInterface" "Hello World"
+ */
+  import java.rmi.Naming;
+
+public class HelloRMIClient4
+{
+    public static void main ( String[] argv ) throws Exception
+    {
+        String              url     = argv[0];
+        String              sth     = argv[1];
+        /*
+         * 这一步过去用的是
+         *
+         * r = LocateRegistry.getRegistry( addr, port )
+         * r.lookup( name )
+         */
+        HelloRMIInterface   hello   = ( HelloRMIInterface )Naming.lookup( url );
+        String              resp    = hello.Echo( sth );
+        System.out.println( resp );
+    }
+}
+```
+
+```bash
+$ java HelloRMIServer4 192.168.65.23 1099 192.168.65.23 0 HelloRMIInterface
+$ java HelloRMIClient4 "rmi://192.168.65.23:1099/HelloRMIInterface" "Hello World"
+$ java.exe HelloRMIClient4 "rmi://192.168.65.23:1099/HelloRMIInterface" "Hello World From Windows"
+
+java.rmi.Naming用"rmi://..."这种形式的url指定周知IP、周知端口等信息。
+```
+
+#### 7.3) Naming.rebind
+
+java.rmi.Naming 是对 java.rmi.registry 的封装使用，没有本质区别。
+
+[http://hg.openjdk.java.net/jdk8u/jdk8u/jdk/file/jdk8u232-ga/src/share/classes/java/rmi/Naming.java](http://hg.openjdk.java.net/jdk8u/jdk8u/jdk/file/jdk8u232-ga/src/share/classes/java/rmi/Naming.java)
+
+```java
+public static void rebind ( String name, Remote obj )
+    throws RemoteException, MalformedURLException
+{
+    ParsedNamingURL parsed      = parseURL( name );
+    Registry        registry    = getRegistry( parsed );
+    if ( obj == null )
+    {
+        throw new NullPointerException( "cannot bind to null" );
+    }
+    registry.rebind( parsed.name, obj );
+}
+```
+
+#### 7.4) Naming.lookup
+
+```java
+public static Remote lookup ( String name )
+    throws NotBoundException, MalformedURLException, RemoteException
+{
+    ParsedNamingURL parsed      = parseURL( name );
+    Registry        registry    = getRegistry( parsed );
+    if ( parsed.name == null )
+    {
+        return registry;
+    }
+    return registry.lookup( parsed.name );
+}
+```
+
+### 8) 分离周知端口与动态端口
+
+就 RPC 架构来说，周知端口提供的服务与动态端口提供的服务完全两码事。前面的 HelloRMIServer 为了演示便捷，将这两种端口放在同一个 main() 侦听，可以分离它们到不同进程中去，但没法分离它们到不同主机中去，Java RMI 对此有安全限制。
+
+这种分离是一种自然而然的需求，周知端口只有一个，动态端口可以有很多，对应不同的远程服务。
+
+#### 8.1) HelloRMIWellknownServer.java
+
+```java
+/*
+ * javac -encoding GBK -g HelloRMIWellknownServer.java
+ * java HelloRMIWellknownServer 192.168.65.23 1099 192.168.65.23
+ */
+  import java.net.InetAddress;
+  import java.rmi.registry.*;
+
+public class HelloRMIWellknownServer
+{
+    public static void main ( String[] argv ) throws Exception
+    {
+        /*
+         * 变量命名故意如此，以与HelloRMIServer4.java产生更直观的对比
+         */
+        String              addr_0      = argv[0];
+        int                 port_0      = Integer.parseInt( argv[1] );
+        String              addr_1      = argv[2];
+        InetAddress         bindAddr_0  = InetAddress.getByName( addr_0 );
+        /*
+         * 这个设置只影响"JRMI ReturnData"中的动态IP字段，不影响动态端口实
+         * 际侦听的地址。
+         */
+        System.setProperty( "java.rmi.server.hostname", addr_1 );
+        /*
+         * 这会侦听周知端口，应该是有个异步机制在背后，不需要单开一个线程
+         * 放这句代码。
+         */
+        Registry            r           = LocateRegistry.createRegistry( port_0, null, new HelloRMIServerSocketFactoryImpl( bindAddr_0 ) );
+        /*
+         * 类似C语言的getchar()，最简单的阻塞。否则本进程结束，周知端口关
+         * 闭。这个阻塞不影响对周知端口的访问。老年程序员的脑洞就是大。
+         */
+        System.in.read();
+    }
+}
+```
+
+上述代码中关于 "java.rmi.server.hostname" 的注释是错误的，一个半月后随着对 RMI 机制的深入调试，回过头来修正文字。事实上本例中 `System.setProperty()` 没有任何用处，废代码一条。如下命令不影响客户端的远程访问:
+
+```bash
+$ java HelloRMIWellknownServer 192.168.65.23 1099 127.0.0.1
+```
+
+#### 8.2) HelloRMIDynamicServer.java
+
+```java
+/*
+ * javac -encoding GBK -g HelloRMIDynamicServer.java
+ * java HelloRMIDynamicServer 192.168.65.23 1099 192.168.65.23 0 HelloRMIInterface
+ */
+  import java.net.InetAddress;
+  import java.rmi.registry.*;
+
+public class HelloRMIDynamicServer
+{
+    public static void main ( String[] argv ) throws Exception
+    {
+        String              addr_0      = argv[0];
+        int                 port_0      = Integer.parseInt( argv[1] );
+        String              addr_1      = argv[2];
+        int                 port_1      = Integer.parseInt( argv[3] );
+        String              name        = argv[4];
+        InetAddress         bindAddr_1  = InetAddress.getByName( addr_1 );
+        /*
+         * getRegistry()并不会发起到周知端口的TCP连接
+         */
+        Registry            r           = LocateRegistry.getRegistry( addr_0, port_0 );
+        HelloRMIInterface   hello       = new HelloRMIInterfaceImpl3( port_1, bindAddr_1 );
+        /*
+         * 向周知端口注册(汇报)动态端口，等待客户端前来访问。rebind()会发
+         * 起到周知端口的TCP连接。
+         */
+        r.rebind( name, hello );
+    }
+}
+```
+
+先侦听周知端口:
+
+```bash
+$ java HelloRMIWellknownServer 192.168.65.23 1099 192.168.65.23
+```
+
+再侦听动态端口:
+
+```bash
+$ java HelloRMIDynamicServer 192.168.65.23 1099 192.168.65.23 0 HelloRMIInterface
+```
+
+在 Windows 中执行客户端:
+
+```bash
+$ java.exe HelloRMIClient4 "rmi://192.168.65.23:1099/HelloRMIInterface" "Hello World From Windows"
+```
+
+#### 8.3) 周知端口与动态端口不在同一台主机上时的幺蛾子
+
+试图让周知端口跑在 192.168.65.23 上，让动态端口跑在 192.168.65.20 上，失败。
+
+在 192.168.65.23 上:
+
+```bash
+$ java HelloRMIWellknownServer 192.168.65.23 1099 192.168.65.20
+```
+
+在 192.168.65.20 上:
+
+```bash
+$ ls -1
+HelloRMIDynamicServer.class
+HelloRMIInterface.class
+HelloRMIInterfaceImpl3.class
+HelloRMIServerSocketFactoryImpl.class
+
+$ java_8_232 HelloRMIDynamicServer 192.168.65.23 1099 192.168.65.20 0 HelloRMIInterface
+Exception in thread "main" java.rmi.ServerException: RemoteException occurred in server thread; nested exception is:
+        java.rmi.AccessException: Registry.rebind disallowed; origin /192.168.65.20 is non-local host
+        at sun.rmi.server.UnicastServerRef.dispatch(UnicastServerRef.java:389)
+        at sun.rmi.transport.Transport$1.run(Transport.java:200)
+        at sun.rmi.transport.Transport$1.run(Transport.java:197)
+        at java.security.AccessController.doPrivileged(Native Method)
+        at sun.rmi.transport.Transport.serviceCall(Transport.java:196)
+        at sun.rmi.transport.tcp.TCPTransport.handleMessages(TCPTransport.java:573)
+        at sun.rmi.transport.tcp.TCPTransport$ConnectionHandler.run0(TCPTransport.java:834)
+        at sun.rmi.transport.tcp.TCPTransport$ConnectionHandler.lambda$run$0(TCPTransport.java:688)
+        at java.security.AccessController.doPrivileged(Native Method)
+        at sun.rmi.transport.tcp.TCPTransport$ConnectionHandler.run(TCPTransport.java:687)
+        at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1149)
+        at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:624)
+        at java.lang.Thread.run(Thread.java:748)
+        at sun.rmi.transport.StreamRemoteCall.exceptionReceivedFromServer(StreamRemoteCall.java:303)
+        at sun.rmi.transport.StreamRemoteCall.executeCall(StreamRemoteCall.java:279)
+        at sun.rmi.server.UnicastRef.invoke(UnicastRef.java:375)
+        at sun.rmi.registry.RegistryImpl_Stub.rebind(RegistryImpl_Stub.java:158)
+        at HelloRMIDynamicServer.main(HelloRMIDynamicServer.java:27)
+Caused by: java.rmi.AccessException: Registry.rebind disallowed; origin /192.168.65.20 is non-local host
+        at sun.rmi.registry.RegistryImpl.checkAccess(RegistryImpl.java:350)
+        at sun.rmi.registry.RegistryImpl_Skel.dispatch(RegistryImpl_Skel.java:142)
+        at sun.rmi.server.UnicastServerRef.oldDispatch(UnicastServerRef.java:469)
+        at sun.rmi.server.UnicastServerRef.dispatch(UnicastServerRef.java:301)
+        at sun.rmi.transport.Transport$1.run(Transport.java:200)
+        at sun.rmi.transport.Transport$1.run(Transport.java:197)
+        at java.security.AccessController.doPrivileged(Native Method)
+        at sun.rmi.transport.Transport.serviceCall(Transport.java:196)
+        at sun.rmi.transport.tcp.TCPTransport.handleMessages(TCPTransport.java:573)
+        at sun.rmi.transport.tcp.TCPTransport$ConnectionHandler.run0(TCPTransport.java:834)
+        at sun.rmi.transport.tcp.TCPTransport$ConnectionHandler.lambda$run$0(TCPTransport.java:688)
+        at java.security.AccessController.doPrivileged(Native Method)
+        at sun.rmi.transport.tcp.TCPTransport$ConnectionHandler.run(TCPTransport.java:687)
+        at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1149)
+        at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:624)
+        at java.lang.Thread.run(Thread.java:748)
+
+HelloRMIDynamicServer抛出异常。从调用栈回溯中注意到:
+
+sun.rmi.registry.RegistryImpl.checkAccess()
+```
+
+参看:
+
+[http://hg.openjdk.java.net/jdk8u/jdk8u/jdk/file/jdk8u232-ga/src/share/classes/sun/rmi/registry/RegistryImpl.java](http://hg.openjdk.java.net/jdk8u/jdk8u/jdk/file/jdk8u232-ga/src/share/classes/sun/rmi/registry/RegistryImpl.java)
+
+```java
+/**
+ * Check that the caller has access to perform indicated operation.
+ * The client must be on same the same host as this server.
+ */
+  public static void checkAccess(String op) throws AccessException
+```
+
+`checkAccess()` 会检查 `rebind()` 的源 IP 与目标 IP 是否位于同一主机，不是则抛出异常 java.rmi.AccessException。
+
+从 TCP 层看没有限制，前述检查是 Java RMI 自己加的，出于安全考虑？这大大限制了 Java RMI 的分布式应用。搜了一下，没有官方绕过方案。
+
+自己 Patch rt.jar 就比较扯了，不考虑这种 Hacking 方案，无论静态还是动态 Patch。
+
+#### 8.4) 周知端口与动态端口不在同一台主机上时的网络通信报文
+
+可以在 192.168.65.23 上用 tcpdump 抓包:
+
+```bash
+$ tcpdump -i ens33 -s 68 -ntpq "tcp port 1099"
+$ tcpdump -i ens33 -s 4096 -ntpqX "tcp port 1099"
+$ tcpdump -i ens33 -s 4096 -ntpq -w HelloRMI_2.cap "tcp port 1099"
+```
+
+也可以直接在 VMnet8 上用 Wireshark 抓两台虚拟机之间的通信。这两种方案不等价，后者 MTU 是 1500，较大的 "JRMI ReturnData" 分散到两个TCP报文中，Wireshark 没有重组它们。而 HelloRMI_2.cap 中 "JRMI ReturnData" 是单个TCP报文。
+
+观察 HelloRMI_2.cap 中 "JRMI ReturnData"，发现 192.168.65.23 已经在抛异常:
+
+```bash
+java.rmi.AccessException: Registry.rebind disallowed; origin /192.168.65.20 is non-local host
+```
+
+正是 checkAccess() 做的检查，只不过周知端口将异常通过 "JRMI ReturnData" 送至动态端口，没有在 Console 上直接显示异常。
+
+可以调试周知端口，通过断点确认流程经过 `checkAccess()`。
+
+#### 8.5) HelloRMIDynamicServer2.java
+
+本例使用 java.rmi.Naming。
+
+```java
+/*
+ * javac -encoding GBK -g HelloRMIDynamicServer2.java
+ * java HelloRMIDynamicServer2 192.168.65.23 1099 192.168.65.23 0 HelloRMIInterface
+ */
+  import java.net.InetAddress;
+  import java.rmi.Naming;
+
+public class HelloRMIDynamicServer2
+{
+    public static void main ( String[] argv ) throws Exception
+    {
+        String              addr_0      = argv[0];
+        int                 port_0      = Integer.parseInt( argv[1] );
+        String              addr_1      = argv[2];
+        int                 port_1      = Integer.parseInt( argv[3] );
+        String              name        = argv[4];
+        String              url         = String.format( "rmi://%s:%d/%s", addr_0, port_0, name );
+        InetAddress         bindAddr_1  = InetAddress.getByName( addr_1 );
+        HelloRMIInterface   hello       = new HelloRMIInterfaceImpl3( port_1, bindAddr_1 );
+        Naming.rebind( url, hello );
+    }
+}
+```
+
+在 Linux 中启动两个服务端:
+
+```bash
+$ java HelloRMIWellknownServer 192.168.65.23 1099 192.168.65.23
+$ java HelloRMIDynamicServer2 192.168.65.23 1099 192.168.65.23 0 HelloRMIInterface
+```
+
+在 Windows 中执行客户端:
+
+```bash
+$ java.exe HelloRMIClient4 "rmi://192.168.65.23:1099/HelloRMIInterface" "Hello World From Windows"
+```
