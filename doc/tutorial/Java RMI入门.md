@@ -1,4 +1,189 @@
+# Java RMI入门
 
+创建: 2020-02-22 10:00
+更新: 2020-08-27 15:39
+链接: http://scz.617.cn:8/network/202002221000.txt
+
+--------------------------------------------------------------------------
+
+## 目录
+
+    ☆ 前言
+    ☆ Java RMI
+        1) HelloRMIInterface.java
+        2) HelloRMIInterfaceImpl.java
+        3) HelloRMIServer.java
+        4) HelloRMIClient.java
+        5) HelloRMIServer/HelloRMIClient不在同一台主机上时的幺蛾子
+            5.0) 转储"com.sun.proxy.$Proxy0"
+            5.1) Java RMI与DCE/MS RPC、ONC/Sun RPC
+            5.2) HelloRMIServer2.java
+            5.3) 深入LocateRegistry.createRegistry()
+            5.4) 深入new HelloRMIInterfaceImpl()
+            5.5) 深入r.rebind()
+        6) 侦听指定IP、指定PORT
+            6.1) HelloRMIServerSocketFactoryImpl.java
+            6.2) HelloRMIInterfaceImpl3.java
+            6.3) HelloRMIServer3.java
+            6.4) 另一种方案
+                6.4.1) HelloRMIInterfaceImpl8.java
+                6.4.2) HelloRMIDynamicServer8.java
+        7) java.rmi.Naming
+            7.1) HelloRMIServer4.java
+            7.2) HelloRMIClient4.java
+            7.3) Naming.rebind
+            7.4) Naming.lookup
+        8) 分离周知端口与动态端口
+            8.1) HelloRMIWellknownServer.java
+            8.2) HelloRMIDynamicServer.java
+            8.3) 周知端口与动态端口不在同一台主机上时的幺蛾子
+            8.4) 周知端口与动态端口不在同一台主机上时的网络通信报文
+            8.5) HelloRMIDynamicServer2.java
+        9) JDK自带RMI相关工具
+            9.1) rmiregistry
+                9.1.1) inside rmiregistry
+                9.1.2) 扫描识别rmiregistry
+       10) 从周知端口获取所有动态端口信息
+           10.1) rmiinfo.java
+           10.2) rmi-dumpregistry.nse
+               10.2.1) HelloRMI_6.cap部分报文解码
+           10.3) rmiregistry_detect.nasl
+               10.3.1) HelloRMI_7.cap部分报文解码
+           10.4) jndiinfo.java
+               10.4.1) jndiinfo.policy
+       11) JNDI
+           11.1) HelloRMIDynamicServer5.java (JNDI+RMI)
+           11.2) HelloRMIClient5.java
+           11.3) HelloRMIDynamicServer6.java
+           11.4) HelloRMIClient6.java
+       12) RMI-IIOP
+           12.1) HelloRMIInterfaceImpl7.java
+               12.1.1) rmic
+           12.2) HelloRMIDynamicServer7.java (JNDI+CORBA)
+           12.3) HelloRMIClient7.java
+           12.4) orbd
+               12.4.1) inside orbd
+           12.5) 测试RMI-IIOP
+               12.5.1) HelloRMIDynamicServer7/HelloRMIClient7不在同一台主机上时的幺蛾子
+           12.6) RMI-IIOP vs RMI
+    ☆ JNDI+LDAP
+        1) 简版LDAP Server
+        2) jndi.ldif
+        3) HelloRMIInterface.java
+        4) HelloRMIInterfaceImpl.java
+        5) JNDILDAPServer.java
+        6) JNDILDAPClient.java
+        7) 编译
+        8) 测试
+            8.1) 为何有个GET请求404时客户端仍然正常结束
+        9) HelloRMIInterfaceImpl8.java
+       10) JNDILDAPServer2.java
+    ☆ 后记
+
+--------------------------------------------------------------------------
+
+## 前言
+
+参看
+
+《Java RMI入门(2)》
+http://scz.617.cn:8/network/202003081810.txt
+
+《Java RMI入门(3)》
+http://scz.617.cn:8/network/202003121717.txt
+
+《Java RMI入门(4)》
+http://scz.617.cn:8/network/202003191728.txt
+
+《Java RMI入门(5)》
+http://scz.617.cn:8/network/202003241127.txt
+
+《Java RMI入门(6)》
+http://scz.617.cn:8/network/202004011650.txt
+
+《Java RMI入门(7)》
+http://scz.617.cn:8/network/202004101018.txt
+
+《Java RMI入门(8)》
+http://scz.617.cn:8/network/202004141657.txt
+
+《Java RMI入门(9)》
+http://scz.617.cn:8/network/202004161823.txt
+
+自从 99 年放弃 Java，再没有主动学习过 Java 的正经面，一直到 2019.11。这一拨学习源自试图理解 Java 漏洞所涉及的若干方面，RMI 正是其中之一。
+
+本文是我学习 RMI 之后的笔记。不打算用一些看上去玄之又玄的概念来开场，做为程序员，一个提纲挈领的 "Hello World" 足以入门。
+
+任何有过 DCE/MS RPC、ONC/Sun RPC 编程、协议分析、漏洞挖掘经历的读者很容易理解本篇笔记，假设本文面向的读者是这一类的，只不过没有接触过 Java RMI。
+
+## Java RMI
+
+**RMI** 是 "Remote Method Invocation" 的缩写。
+
+### 1) HelloRMIInterface.java
+
+```java
+/*
+ * javac -encoding GBK -g HelloRMIInterface.java
+ */
+  import java.rmi.*;
+
+/*
+ * The Interface must always be public and extend Remote.
+ *
+ * All methods described in the Remote interface must list RemoteException
+ * in their throws clause.
+ */
+  public interface HelloRMIInterface extends Remote
+  {
+    public String Echo ( String sth ) throws RemoteException;
+  }
+```
+
+### 2) HelloRMIInterfaceImpl.java
+
+```java
+/*
+ * javac -encoding GBK -g HelloRMIInterfaceImpl.java
+ */
+  import java.rmi.RemoteException;
+  import java.rmi.server.UnicastRemoteObject;
+
+public class HelloRMIInterfaceImpl extends UnicastRemoteObject implements HelloRMIInterface
+{
+    private static final long   serialVersionUID    = 0x5120131473637a00L;
+
+    protected HelloRMIInterfaceImpl () throws RemoteException
+    {
+        super();
+    }
+    
+    @Override
+    public String Echo ( String sth ) throws RemoteException
+    {
+        /*
+         * 故意加一对[]，将来抓包时便于识别请求、响应
+         */
+        return( "[" + sth + "]" );
+    }
+}
+```
+
+### 3) HelloRMIServer.java
+
+```java
+/*
+ * javac -encoding GBK -g HelloRMIServer.java
+ * java HelloRMIServer 1099 HelloRMIInterface
+ */
+  import java.rmi.registry.*;
+
+public class HelloRMIServer
+{
+    public static void main ( String[] argv ) throws Exception
+    {
+        int                 port    = Integer.parseInt( argv[0] );
+        String              name    = argv[1];
         /*
          * https://docs.oracle.com/javase/8/docs/api/java/rmi/registry/LocateRegistry.html
          *
