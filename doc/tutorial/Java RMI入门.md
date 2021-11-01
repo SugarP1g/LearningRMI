@@ -1201,3 +1201,128 @@ $ java HelloRMIDynamicServer2 192.168.65.23 1099 192.168.65.23 0 HelloRMIInterfa
 ```bash
 $ java.exe HelloRMIClient4 "rmi://192.168.65.23:1099/HelloRMIInterface" "Hello World From Windows"
 ```
+
+### 9) JDK自带RMI相关工具
+
+#### 9.1) rmiregistry
+
+JDK 自带 rmiregistry 用来单独提供周知端口服务，可以指定端口号。
+
+rmiregistry 的地位相当于 ONC/Sun RPC 的 rpcbind。
+
+```bash
+$ rmiregistry 1099
+
+$ netstat -natp | grep 1099
+tcp        0      0 0.0.0.0:1099            0.0.0.0:*               LISTEN      55074/rmiregistry
+```
+
+上面这条命令侦听周知端口，相当于:
+
+```bash
+$ java HelloRMIWellknownServer 0.0.0.0 1099 192.168.65.23
+```
+
+rmiregistry 不像 HelloRMIWellknownServer，后者可以指定周知端口侦听什么 IP，前者只能让周知端口侦听 0.0.0.0。
+
+测试 rmiregistry 是否可用:
+
+```bash
+$ java HelloRMIDynamicServer2 192.168.65.23 1099 192.168.65.23 0 HelloRMIInterface
+
+$ netstat -natp | grep java
+tcp        0      0 192.168.65.23:38063     0.0.0.0:*               LISTEN      56281/java
+
+$ java HelloRMIClient4 "rmi://127.0.0.1:1099/HelloRMIInterface" "Hello World"
+$ java.exe HelloRMIClient4 "rmi://192.168.65.23:1099/HelloRMIInterface" "Hello World From Windows"
+```
+
+##### 9.1.1) inside rmiregistry
+
+不知上哪找 rmiregistry 的源码，用 IDA 逆一下，main() 中在调 JLI_Launch()。
+
+参看:
+
+[http://hg.openjdk.java.net/jdk8u/jdk8u/jdk/file/tip/src/share/bin/java.c](http://hg.openjdk.java.net/jdk8u/jdk8u/jdk/file/tip/src/share/bin/java.c)
+
+```c
+/*
+ * Entry point.
+ */
+  int
+  JLI_Launch(int argc, char ** argv,              /* main argc, argc */
+        int jargc, const char** jargv,          /* java args */
+        int appclassc, const char** appclassv,  /* app classpath */
+        const char* fullversion,                /* full version defined */
+        const char* dotversion,                 /* dot version defined */
+        const char* pname,                      /* program name */
+        const char* lname,                      /* launcher name */
+        jboolean javaargs,                      /* JAVA_ARGS */
+        jboolean cpwildcard,                    /* classpath wildcard*/
+        jboolean javaw,                         /* windows-only javaw */
+        jint ergo                               /* ergonomics class policy */
+  )
+```
+
+可以用 jinfo 查看 rmiregistry 进程:
+
+```bash
+$ jinfo 55074
+...
+sun.java.command = sun.rmi.registry.RegistryImpl 1099
+...
+
+"rmiregistry 1099"相当于:
+
+$ java sun.rmi.registry.RegistryImpl 1099
+```
+
+参看:
+
+[http://hg.openjdk.java.net/jdk8u/jdk8u/jdk/file/jdk8u232-ga/src/share/classes/sun/rmi/registry/RegistryImpl.java](http://hg.openjdk.java.net/jdk8u/jdk8u/jdk/file/jdk8u232-ga/src/share/classes/sun/rmi/registry/RegistryImpl.java)
+
+`createRegistry()` 调的就是 `RegistryImpl()`。RegistryImpl.java 中有 `main()`:
+
+```java
+/**
+ * Main program to start a registry. <br>
+ * The port number can be specified on the command line.
+ */
+  public static void main(String args[])
+  {
+  ...
+        final int regPort = (args.length >= 1) ? Integer.parseInt(args[0])
+                                               : Registry.REGISTRY_PORT;
+        try {
+            registry = AccessController.doPrivileged(
+                new PrivilegedExceptionAction<RegistryImpl>() {
+                    public RegistryImpl run() throws RemoteException {
+                        return new RegistryImpl(regPort);
+                    }
+                }, getAccessControlContext(regPort));
+        } catch (PrivilegedActionException ex) {
+            throw (RemoteException) ex.getException();
+        }
+
+        // prevent registry from exiting
+        while (true) {
+            try {
+                Thread.sleep(Long.MAX_VALUE);
+            } catch (InterruptedException e) {
+            }
+        }
+    } catch (NumberFormatException e) {
+        System.err.println(MessageFormat.format(
+            getTextResource("rmiregistry.port.badnumber"),
+            args[0] ));
+        System.err.println(MessageFormat.format(
+            getTextResource("rmiregistry.usage"),
+            "rmiregistry" ));
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+    System.exit(1);
+  }
+```
+
+从源码看出，这个 `main()` 只能指定端口，不能指定 IP。
