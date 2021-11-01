@@ -1326,3 +1326,88 @@ $ java sun.rmi.registry.RegistryImpl 1099
 ```
 
 从源码看出，这个 `main()` 只能指定端口，不能指定 IP。
+
+##### 9.1.2) 扫描识别rmiregistry
+
+Nessus 有个插件 rmi_remote_object_detect.nasl，核心操作对应 rmi_connect()，可以抓包看看它触发的通信报文。
+
+```bash
+$ vi rmi_remote_object_detect_mini.nasl
+```
+
+```c
+#
+# (C) Tenable Network Security, Inc.
+#
+
+include("compat.inc");
+
+if ( description )
+{
+    script_id( 22363 );
+    exit( 0 );
+}
+
+include("byte_func.inc");
+include("global_settings.inc");
+include("misc_func.inc");
+include("audit.inc");
+include("rmi.inc");
+
+port    = 1099;
+#
+# verify we can connect to this port using RMI
+#
+soc     = rmi_connect( port:port );
+close( soc );
+```
+
+侦听周知端口:
+
+```bash
+$ rmiregistry 1099
+```
+
+在 Windows 上运行 Nessus 插件:
+
+```bash
+$ nasl -t 192.168.65.23 rmi_remote_object_detect_mini.nasl
+```
+
+这个没有输出，只是来触发通信的，抓包(HelloRMI_8.cap)。
+
+```
+No.     len   Protocol src                   dst                   sport  dport  Info
+      4 61    RMI      192.168.65.1          192.168.65.23         58334  1099   JRMI, Version: 2, StreamProtocol
+
+Internet Protocol Version 4, Src: 192.168.65.1, Dst: 192.168.65.23
+Transmission Control Protocol, Src Port: 58334, Dst Port: 1099, Seq: 1, Ack: 1, Len: 7
+Java RMI
+    Magic: 0x4a524d49
+    Version: 2
+    Protocol: StreamProtocol (0x4b)
+
+0030                    4a 52 4d 49 00 02 4b                  JRMI..K
+```
+
+```
+No.     len   Protocol src                   dst                   sport  dport  Info
+      6 73    RMI      192.168.65.23         192.168.65.1          1099   58334  JRMI, ProtocolAck
+
+Internet Protocol Version 4, Src: 192.168.65.23, Dst: 192.168.65.1
+Transmission Control Protocol, Src Port: 1099, Dst Port: 58334, Seq: 1, Ack: 8, Len: 19
+Java RMI
+    Input Stream Message: ProtocolAck (0x4e)
+    EndPointIdentifier
+        Length: 12
+        Hostname: 192.168.65.1
+        Port: 58334
+
+0030                    4e 00 0c 31 39 32 2e 31 36 38         N..192.168
+0040  2e 36 35 2e 31 00 00 e3 de                        .65.1....
+```
+
+这部分有官方文档，参看:
+
+- 10.2 RMI Transport Protocol
+- [https://docs.oracle.com/javase/8/docs/platform/rmi/spec/rmi-protocol3.html](https://docs.oracle.com/javase/8/docs/platform/rmi/spec/rmi-protocol3.html)
