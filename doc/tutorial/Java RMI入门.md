@@ -1411,3 +1411,77 @@ Java RMI
 
 - 10.2 RMI Transport Protocol
 - [https://docs.oracle.com/javase/8/docs/platform/rmi/spec/rmi-protocol3.html](https://docs.oracle.com/javase/8/docs/platform/rmi/spec/rmi-protocol3.html)
+
+一种可行的扫描方案，向 1099/TCP 发送 "4a 52 4d 49 00 02 4b"，启用读超时的情况下尝试读取23或更多字节的响应数据。如果响应数据长度不在[14,22]闭区间，服务端不是 rmiregistry 或等价服务。
+
+检查响应数据前两字节是否是 "4e 00"；0x4e 表示 ProtocolAck，接下来的0其实是另一个2字节长度字段的高字节；如果服务端确为 rmiregistry 或等价服务，响应数据 `buf[1:3]` 是个长度字段，指明后面的 IP 串长度，结尾没有 NUL 字符；这个长度最大 15、最小 7，其高字节必是 0。[14,22] 是这么来的:
+
+```
+14=1+2+7+4
+22=1+2+15+4
+```
+
+有人可能会想，为什么不检查响应数据中的 IP 是否等于请求包源 IP？考虑 NAT 情形，不建议这样做。
+
+快速扫描方案，向 1099/TCP 发送 "4a 52 4d 49 00 02 4b"，启用读超时的情况下尝试读取2字节的响应数据，检查响应数据是否等于 "4e 00"。
+
+### 10) 从周知端口获取所有动态端口信息
+
+#### 10.1) rmiinfo.java
+
+ONC/Sun RPC 有个 rpcinfo，可以列出向 rpcbind 注册过的所有动态端口。
+
+DCE/MS RPC 当年没有官方工具干类似的事，但有相应 API。我写过 135dump.c，还写过 NASL 版本。
+
+Java RMI 有相应 API 干类似的事。
+
+```java
+/*
+ * javac -encoding GBK -g rmiinfo.java
+ * java rmiinfo 192.168.65.23 1099
+ */
+  import java.rmi.registry.*;
+
+public class rmiinfo
+{
+    public static void main ( String[] argv ) throws Exception
+    {
+        String      addr    = argv[0];
+        int         port    = Integer.parseInt( argv[1] );
+        Registry    r       = LocateRegistry.getRegistry( addr, port );
+        String[]    names   = r.list();
+        // for ( int i = 0; i < names.length; i++ )
+        // {
+        //     System.out.println( names[i] );
+        // }
+        for ( String name : names )
+        {
+            System.out.println( name );
+        }
+    }
+}
+```
+
+侦听周知端口、动态端口:
+
+```bash
+$ rmiregistry 1099
+$ java HelloRMIDynamicServer2 192.168.65.23 1099 192.168.65.23 0 HelloRMIInterface
+```
+
+用 rmiinfo 向周知端口查询所有注册过来的 name:
+
+```bash
+$ java.exe rmiinfo 192.168.65.23 1099
+HelloRMIInterface
+```
+
+本例只有一个动态端口向周知端口注册过，rmiinfo 只返回一个 name，现实世界中可能返回很多 name。
+
+`r.list()` 这个API太弱了，只返回 name，不返回与之对应的动态端口号。如果用标准 Java API 进行 RPC 调用，有 name 就够了。如果想绕过周知端口直接访问动态端口，只有 name 是不行的。
+
+抓包看 `r.list()` 的通信报文(HelloRMI_3.cap)。起初我以为底层返回了动态端口，只是上层 API 只返回 name，结果 "JRMI ReturnData" 中确实只有 name 信息。
+
+`r.lookup()` 对应的 "JRMI ReturnData" 中包含 name 对应的动态端口，但 API 没有显式返回这个信息。总的来说，Java RMI 就不想让你知道动态端口这回事，想跟你玩点玄之又玄的其他概念。
+
+一个可行的办法是自己写 Java RMI 客户端，做协议封装、解码。不过有个更简单的办法，参看后面的 jndiinfo.java。
